@@ -303,4 +303,4 @@ app.post('/mcp', mcpLimiter, async (req, res) => {
 
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 
-app.listen(PORT, () => console.log(`inboxiq-mcp-backend listening on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`inboxiq-mcp-backend listening on ${PORT}`));
