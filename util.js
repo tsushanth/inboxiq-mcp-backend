@@ -18,6 +18,12 @@ export function randomOtp() {
   return String(crypto.randomInt(100000, 999999));
 }
 
+/** "482913" -> "4. 8. 2. 9. 1. 3." — spoken with <Say>, gives each digit its own pause
+ *  instead of being read as a six-digit number, which is hard to catch by ear. */
+export function spellOutDigits(code) {
+  return code.split('').join('. ') + '.';
+}
+
 export function normalizePhone(input) {
   const digits = String(input).replace(/[^\d+]/g, '');
   if (!digits.startsWith('+')) return null;

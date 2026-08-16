@@ -3,7 +3,7 @@ import expressWs from 'express-ws';
 import rateLimit from 'express-rate-limit';
 import twilio from 'twilio';
 import { db } from './db.js';
-import { randomToken, sha256, verifyPkce, randomOtp, normalizePhone } from './util.js';
+import { randomToken, sha256, verifyPkce, randomOtp, normalizePhone, spellOutDigits } from './util.js';
 
 const PORT = process.env.PORT || 8080;
 const ISSUER = process.env.ISSUER_URL || `http://localhost:${PORT}`;
@@ -73,12 +73,12 @@ function renderPhoneForm(oauthParams, error) {
   const hidden = Object.entries(oauthParams).map(([k, v]) => `<input type="hidden" name="${k}" value="${escapeHtml(v || '')}">`).join('\n');
   return `<!doctype html><html><body style="font-family:sans-serif;max-width:420px;margin:40px auto">
     <h2>Connect InboxIQ</h2>
-    <p>Enter the phone number of the InboxIQ app you want to connect. We'll text you a code.</p>
+    <p>Enter the phone number of the InboxIQ app you want to connect. We'll call you and read out a code.</p>
     ${error ? `<p style="color:red">${escapeHtml(error)}</p>` : ''}
     <form method="POST" action="/authorize/send-otp">
       ${hidden}
       <input type="tel" name="phone_number" placeholder="+14155551234" required style="width:100%;padding:8px;font-size:16px">
-      <button type="submit" style="margin-top:12px;padding:8px 16px">Send code</button>
+      <button type="submit" style="margin-top:12px;padding:8px 16px">Call me with a code</button>
     </form>
   </body></html>`;
 }
@@ -86,8 +86,8 @@ function renderPhoneForm(oauthParams, error) {
 function renderOtpForm(oauthParams, phoneNumber, error) {
   const hidden = Object.entries(oauthParams).map(([k, v]) => `<input type="hidden" name="${k}" value="${escapeHtml(v || '')}">`).join('\n');
   return `<!doctype html><html><body style="font-family:sans-serif;max-width:420px;margin:40px auto">
-    <h2>Enter the code we texted you</h2>
-    <p>Sent to ${escapeHtml(phoneNumber)}.</p>
+    <h2>Enter the code from the call</h2>
+    <p>We just called ${escapeHtml(phoneNumber)} and read out a 6-digit code — answer and listen for it.</p>
     ${error ? `<p style="color:red">${escapeHtml(error)}</p>` : ''}
     <form method="POST" action="/authorize/verify-otp">
       ${hidden}
@@ -123,18 +123,20 @@ app.post('/authorize/send-otp', otpLimiter, async (req, res) => {
   const params = oauthParamsFrom(req.body);
   const phone = normalizePhone(req.body.phone_number);
   if (!phone) return res.send(renderPhoneForm(params, 'Enter a valid phone number in +1XXXXXXXXXX format.'));
-  if (!twilioClient) return res.status(500).send('SMS delivery is not configured.');
+  if (!twilioClient) return res.status(500).send('Verification delivery is not configured.');
 
   const code = randomOtp();
   const id = randomToken(16);
   db.prepare('INSERT INTO otp_challenges (id, phone_number, code_hash, attempts, expires_at) VALUES (?, ?, ?, 0, ?)')
     .run(id, phone, sha256(code), Date.now() + OTP_TTL_MS);
 
-  await twilioClient.messages.create({
-    to: phone,
-    from: TWILIO_PHONE_NUMBER,
-    body: `Your InboxIQ connection code is ${code}. Expires in 5 minutes.`,
-  });
+  // Voice, not SMS: sending SMS/MMS through Twilio requires A2P 10DLC or toll-free
+  // verification (a real compliance process, not something to route around) — outbound
+  // voice calls carry no equivalent registration requirement, so this is what actually
+  // works today. <Say> spells the code out digit-by-digit, twice, at a deliberate pace.
+  const spoken = spellOutDigits(code);
+  const twiml = `<Response><Say voice="Polly.Joanna">Your InboxIQ connection code is: <break time="300ms"/>${spoken}<break time="700ms"/>I'll repeat that: <break time="300ms"/>${spoken}</Say></Response>`;
+  await twilioClient.calls.create({ to: phone, from: TWILIO_PHONE_NUMBER, twiml });
 
   res.send(renderOtpForm(params, phone));
 });
