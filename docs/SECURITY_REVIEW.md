@@ -128,6 +128,7 @@ Residual R5.
   app) are non-browser. Left as is.
 - Token entropy: access/refresh/auth-code/relay tokens are 192-256 bits from `crypto.randomBytes`; stored as
   SHA-256 hashes; the lookup is by hash so there is no timing channel on the token itself.
+- Dependencies: `npm audit --omit=dev` reported 5 advisories (1 critical in `proxy-addr`, 1 high in `axios`, plus `qs`/`body-parser`/`express`). `package-lock.json` was updated within the existing semver ranges (express 4.22.3, twilio 5.13.1, axios 1.20.0); the audit is now clean and the suite passes on the new versions.
 - Trust proxy: `trust proxy = 1` is correct for Fly (one proxy hop). Rate limiting now keys on `Fly-Client-IP`
   when running on Fly (set by the edge, not client-controllable) and on `req.ip` elsewhere. Limiter state is
   in memory (single machine, fine); the per-number and global limits are persisted in SQLite.
