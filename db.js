@@ -175,4 +175,5 @@ export function scrubPlaintextPhones(db) {
   })();
   db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   db.exec('VACUUM');
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
 }
