@@ -7,6 +7,8 @@ primary_region = "sjc"
   PORT = "8080"
   DB_PATH = "/data/inboxiq-mcp.db"
   ISSUER_URL = "https://mcp.kreativekoala.llc"
+  # Voice-call verification only to US/Canada numbers (toll-fraud guard); widen deliberately if needed.
+  OTP_ALLOWED_COUNTRY_PREFIXES = "+1"
 
 [[mounts]]
   source = "inboxiq_mcp_data"
