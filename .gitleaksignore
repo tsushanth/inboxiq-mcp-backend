@@ -1,0 +1,3 @@
+# Test marker, not a credential: relay.test.js uses these fixed strings to prove message bodies
+# never reach the database file or logs. Reviewed 2026-10-13.
+7458135634a311694b8fe7544a568b07b9eb4096:test/relay.test.js:generic-api-key:107
