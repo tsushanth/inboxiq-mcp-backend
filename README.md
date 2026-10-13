@@ -29,7 +29,7 @@ inboxiq-mcp-backend  (this repo, public, mcp.kreativekoala.llc)
 InboxIQ app on the user's phone
 ```
 
-- `/authorize` — phone number entry → Twilio SMS OTP → proves the Claude
+- `/authorize` — phone number entry → Twilio voice-call OTP → proves the Claude
   account maps to this specific phone, issues an auth code.
 - `/token` — exchanges the auth code (PKCE-verified) for an access + refresh
   token.
@@ -39,6 +39,13 @@ InboxIQ app on the user's phone
 - `/mcp` — what Claude actually calls per-request; resolves the OAuth access
   token to a phone number, relays the JSON-RPC body to that phone's live
   WebSocket connection, and returns whatever it responds with.
+
+## Docs
+
+- `docs/PROTOCOL.md` - exact API contract and server configuration
+- `docs/SECURITY_REVIEW.md` - security review, fixes and residual risks
+- `docs/DEPLOY.md` - deploy, rollback and migration plan
+- `npm test` (node:test, temp SQLite, no network) and `npm run smoke` (local end-to-end, console OTP)
 
 ## Required secrets (set via `flyctl secrets set`, never committed)
 
