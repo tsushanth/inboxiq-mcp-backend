@@ -1,5 +1,8 @@
-node_modules/
+node_modules
+.git
 *.db
 *.db-wal
 *.db-shm
-.git/
+test
+scripts
+docs
