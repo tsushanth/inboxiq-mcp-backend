@@ -98,7 +98,9 @@ export async function connectPhone(s, relayToken, handler = (p) => ({ echoed: p 
     ws.on('error', () => resolve('error'));
     ws.on('close', (code) => resolve(`closed:${code}`));
   });
-  return { ws, outcome, closed };
+  // The upgrade always completes; an unauthorized socket is then closed with 4401 right away.
+  const settled = outcome !== 'open' ? outcome : await Promise.race([closed.then((c) => `closed:${c}`), new Promise((r) => setTimeout(() => r('open'), 150))]);
+  return { ws, outcome: settled, closed };
 }
 
 export const mcp = (s, token, body = { jsonrpc: '2.0', id: 1, method: 'ping' }) =>
