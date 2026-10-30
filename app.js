@@ -1,3 +1,4 @@
+import { createMonitor, classifyDeliveryError } from './monitor.js';
 import express from 'express';
 import expressWs from 'express-ws';
 import rateLimit from 'express-rate-limit';
@@ -53,7 +54,8 @@ const str = (v, max = 2048) => (typeof v === 'string' && v.length <= max ? v : '
  * delivery object from otp-delivery.js. Nothing here reads message bodies into storage:
  * /mcp request bodies and WebSocket replies are held in memory only for the one relay call.
  */
-export function createApp({ db, delivery, config = loadConfig(), logger = console }) {
+export function createApp({ db, delivery, config = loadConfig(), logger = console, monitor = createMonitor() }) {
+  const health = { purgeOkAt: Date.now() }; // boot counts as a good purge; server.js purges on start
   const phoneKey = makePhoneKeyFn(config.phoneHashSecret);
   const hashed = !!config.phoneHashSecret;
   const secretCheck = hashed ? crypto.createHmac('sha256', config.phoneHashSecret).update('secret-check').digest('hex') : '';
@@ -92,7 +94,7 @@ export function createApp({ db, delivery, config = loadConfig(), logger = consol
   });
   // Request log: method, path (no query string, no body), status, duration. Never message content or phone numbers.
   app.use((req, res, next) => {
-    if (req.path === '/healthz') return next();
+    if (req.path === '/healthz' || req.path === '/healthz/deep') return next();
     const t = Date.now();
     res.on('finish', () => logger.log(`${req.method} ${req.path} ${res.statusCode} ${Date.now() - t}ms`));
     next();
@@ -145,6 +147,7 @@ export function createApp({ db, delivery, config = loadConfig(), logger = consol
     out.rate_counters = db.prepare('DELETE FROM rate_counters WHERE window_start < ?').run(now - 2 * DAY).changes;
     // Clients that registered but never produced a code/token within 90 days.
     out.oauth_clients = db.prepare(`DELETE FROM oauth_clients WHERE created_at < ? AND client_id NOT IN (SELECT client_id FROM refresh_tokens) AND client_id NOT IN (SELECT client_id FROM access_tokens) AND client_id NOT IN (SELECT client_id FROM auth_codes)`).run(now - 90 * DAY).changes;
+    health.purgeOkAt = Date.now();
     return out;
   }
 
@@ -274,6 +277,8 @@ export function createApp({ db, delivery, config = loadConfig(), logger = consol
     } catch (err) {
       db.prepare('DELETE FROM otp_challenges WHERE id = ?').run(id);
       logger.error(`otp delivery failed (${err?.code || err?.name || 'error'})`);
+      const c = classifyDeliveryError(err);
+      if (c.alert) monitor.failure('otp-delivery', c.message, c.context);
       return { error: 'delivery_failed' };
     }
     return { id };
@@ -318,7 +323,10 @@ export function createApp({ db, delivery, config = loadConfig(), logger = consol
       if (err) return res.status(400).send(err);
       const phone = normalizePhone(req.body?.phone_number);
       if (!phone) return res.send(renderPhoneForm(params, 'Enter a valid phone number in +1XXXXXXXXXX format.'));
-      if (!delivery.configured) return res.status(500).send('Verification delivery is not configured.');
+      if (!delivery.configured) {
+        monitor.failure('otp-delivery', 'InboxIQ relay OTP delivery is not configured', { cls: 'not-configured' });
+        return res.status(500).send('Verification delivery is not configured.');
+      }
       const sent = await sendOtp(phone, 'auth');
       if (sent.error) return res.send(renderPhoneForm(params, sendMessage[sent.error]));
       res.send(renderOtpForm(params, phone));
@@ -480,7 +488,10 @@ export function createApp({ db, delivery, config = loadConfig(), logger = consol
     try {
       const phone = normalizePhone(req.body?.phone_number);
       if (!phone) return res.status(400).json({ error: 'invalid_phone_number' });
-      if (!delivery.configured) return res.status(503).json({ error: 'otp_delivery_unavailable' });
+      if (!delivery.configured) {
+        monitor.failure('otp-delivery', 'InboxIQ relay OTP delivery is not configured', { cls: 'not-configured' });
+        return res.status(503).json({ error: 'otp_delivery_unavailable' });
+      }
       const sent = await sendOtp(phone, 'link');
       if (sent.error === 'rate_limited') return res.status(429).json({ error: 'rate_limited' });
       if (sent.error === 'destination_not_allowed') return res.status(400).json({ error: 'destination_not_allowed' });
@@ -653,11 +664,25 @@ export function createApp({ db, delivery, config = loadConfig(), logger = consol
     } catch (err) {
       const map = { phone_not_connected: 503, too_many_requests: 429, relay_timeout: 504 };
       const status = map[err.message] || 502;
+      // phone_not_connected / too_many_requests / relay_timeout are normal phone-side states; anything else is ours.
+      if (!map[err.message]) monitor.failure('relay-unexpected', 'InboxIQ relay failed with an unexpected error', { cls: String(err?.code || err?.name || 'error').slice(0, 40) });
       res.status(status).json({ error: map[err.message] ? err.message : 'relay_failed' });
     }
   });
 
   app.get('/healthz', (req, res) => res.json({ ok: true }));
+
+  // Deep check for the external probe (kept separate from /healthz, which Fly and the existing probe use):
+  // database readable, hourly purge still completing (dead-man: 3 missed runs), OTP delivery configured.
+  const PURGE_STALE_MS = 3 * HOUR;
+  app.get('/healthz/deep', (req, res) => {
+    let dbOk = true;
+    try { db.prepare('SELECT 1').get(); } catch { dbOk = false; }
+    const purgeOk = Date.now() - health.purgeOkAt <= PURGE_STALE_MS;
+    const otpOk = !!delivery.configured;
+    const ok = dbOk && purgeOk && otpOk;
+    res.status(ok ? 200 : 503).json({ ok, db: dbOk ? 'ok' : 'error', purge: purgeOk ? 'ok' : 'stale', otp: otpOk ? 'ok' : 'unconfigured' });
+  });
 
   // Last-resort handlers: never leak stack traces or internals.
   app.use((err, req, res, next) => {
@@ -665,6 +690,7 @@ export function createApp({ db, delivery, config = loadConfig(), logger = consol
     if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'payload_too_large' });
     if (err?.type === 'entity.parse.failed' || err?.status === 400) return res.status(400).json({ error: 'invalid_request' });
     logger.error(`unhandled error (${err?.code || err?.name || 'error'})`);
+    monitor.backendError(req.method, req.route?.path ?? 'unmatched', err, 500);
     res.status(500).json({ error: 'server_error' });
   });
 
