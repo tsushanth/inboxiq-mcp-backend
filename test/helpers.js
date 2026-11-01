@@ -18,16 +18,17 @@ export function tmpDbPath() {
 }
 
 /** Starts the real app on a random port with a temp SQLite file and a stub OTP delivery (no Twilio, no network). */
-export async function startServer({ env = {}, dbPath = tmpDbPath(), setupDb } = {}) {
+export async function startServer({ env = {}, dbPath = tmpDbPath(), setupDb, monitor } = {}) {
   if (setupDb) setupDb(dbPath);
   const db = openDb(dbPath);
   const sent = [];
   const logs = [];
-  const behaviour = { failDelivery: false };
+  const behaviour = { failDelivery: false, deliveryError: null, configured: true };
   const delivery = {
     mode: 'stub',
-    configured: true,
+    get configured() { return behaviour.configured; },
     async deliver(phone, code) {
+      if (behaviour.deliveryError) throw behaviour.deliveryError;
       if (behaviour.failDelivery) throw Object.assign(new Error(`Invalid 'To' Phone Number: ${phone}`), { code: 21211 });
       sent.push({ phone, code });
     },
@@ -35,7 +36,7 @@ export async function startServer({ env = {}, dbPath = tmpDbPath(), setupDb } = 
   const capture = (level) => (...a) => logs.push(`${level} ${a.join(' ')}`);
   const logger = { log: capture('log'), warn: capture('warn'), error: capture('error') };
   const config = loadConfig({ IP_LIMIT_SCALE: '1000', ...env });
-  const built = createApp({ db, delivery, config, logger });
+  const built = createApp({ db, delivery, config, logger, ...(monitor ? { monitor } : {}) });
   const server = await new Promise((resolve) => { const s = built.app.listen(0, '127.0.0.1', () => resolve(s)); });
   const base = `http://127.0.0.1:${server.address().port}`;
   const sockets = new Set();
