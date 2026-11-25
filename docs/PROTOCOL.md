@@ -92,7 +92,10 @@ RFC 7009: `token`, `client_id`. Always `200 {}`. Revokes the grant for a refresh
 `Authorization: Bearer <access_token>`, JSON-RPC body (max 256 KB), relayed to the number's live socket.
 `401 missing_token | invalid_or_expired_token` (now with `WWW-Authenticate: Bearer error="invalid_token"`),
 `400 invalid_request`, `413 payload_too_large`, `429 too_many_requests` (16 in-flight per number),
-`503 phone_not_connected`, `504 relay_timeout` (30 s), `502 relay_failed`.
+`503 phone_not_connected` (with `Retry-After: 900` and a plain `message`), `504 relay_timeout` (30 s), `502 relay_failed`.
+`GET /healthz/deep` also returns `relay.phonesConnected` and `relay.last24h` (`calls`, `ok`, `notConnected`, `timedOut`,
+`limited`, `failed`; in memory, reset by a restart). When calls arrive for a phone silent for over a day, the relay reports
+`relay-phone-offline` at most once a day.
 
 ### GET /healthz  [old]
 `200 {"ok":true}`.
