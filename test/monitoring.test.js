@@ -57,7 +57,7 @@ test('/healthz/deep: ok, then 503 when the purge dead-man goes stale or delivery
   try {
     let r = await fetch(`${s.base}/healthz/deep`);
     assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { ok: true, db: 'ok', purge: 'ok', otp: 'ok' });
+    assert.deepEqual(await r.json(), { ok: true, db: 'ok', purge: 'ok', otp: 'ok', relay: { phonesConnected: 0, last24h: { calls: 0, ok: 0, notConnected: 0, timedOut: 0, limited: 0, failed: 0 } } });
     s.behaviour.configured = false;
     r = await fetch(`${s.base}/healthz/deep`);
     assert.equal(r.status, 503);

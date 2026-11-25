@@ -5,6 +5,7 @@ import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
 import { randomToken, sha256, safeEqual, verifyPkce, randomOtp, normalizePhone, makePhoneKeyFn, redirectUriAllowed } from './util.js';
 import { backfillPhoneKeys, scrubPlaintextPhones } from './db.js';
+import { createRelayStats } from './relay-stats.js';
 
 const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
@@ -56,6 +57,8 @@ const str = (v, max = 2048) => (typeof v === 'string' && v.length <= max ? v : '
  */
 export function createApp({ db, delivery, config = loadConfig(), logger = console, monitor = createMonitor() }) {
   const health = { purgeOkAt: Date.now() }; // boot counts as a good purge; server.js purges on start
+  const relayStats = createRelayStats();
+  let offlineAlertAt = 0;
   const phoneKey = makePhoneKeyFn(config.phoneHashSecret);
   const hashed = !!config.phoneHashSecret;
   const secretCheck = hashed ? crypto.createHmac('sha256', config.phoneHashSecret).update('secret-check').digest('hex') : '';
@@ -643,6 +646,21 @@ export function createApp({ db, delivery, config = loadConfig(), logger = consol
     });
   }
 
+  // A client is calling for a phone that has been gone a long time: nothing will answer until the app reconnects, and the
+  // caller only ever sees 503. Told at most once a day.
+  const OFFLINE_ALERT_AFTER_MS = DAY;
+  function noteOfflinePhone(pk) {
+    const link = db.prepare('SELECT linked_at, last_connected_at FROM phone_links WHERE phone_key = ?').get(pk);
+    const since = link ? (link.last_connected_at ?? link.linked_at) : null;
+    const now = Date.now();
+    if (since != null && now - since < OFFLINE_ALERT_AFTER_MS) return;
+    if (now - offlineAlertAt < DAY) return;
+    offlineAlertAt = now;
+    monitor.failure('relay-phone-offline', 'InboxIQ relay is receiving calls for a phone that has not connected for over a day', {
+      daysOffline: since == null ? 'unlinked' : String(Math.floor((now - since) / DAY)),
+    });
+  }
+
   // ---------- /mcp: what Claude actually calls after OAuth ----------
 
   app.post('/mcp', limiter(120), async (req, res) => {
@@ -660,10 +678,17 @@ export function createApp({ db, delivery, config = loadConfig(), logger = consol
 
     try {
       const result = await relayToPhone(rowKey(row), req.body);
+      relayStats.record('ok');
       res.json(result === undefined ? {} : result);
     } catch (err) {
       const map = { phone_not_connected: 503, too_many_requests: 429, relay_timeout: 504 };
       const status = map[err.message] || 502;
+      relayStats.record(map[err.message] ? err.message : 'failed');
+      if (err.message === 'phone_not_connected') {
+        noteOfflinePhone(rowKey(row));
+        res.setHeader('Retry-After', '900');
+        return res.status(status).json({ error: err.message, message: 'InboxIQ on your phone is not connected. Open InboxIQ, turn on Connect to Claude, then try again.' });
+      }
       // phone_not_connected / too_many_requests / relay_timeout are normal phone-side states; anything else is ours.
       if (!map[err.message]) monitor.failure('relay-unexpected', 'InboxIQ relay failed with an unexpected error', { cls: String(err?.code || err?.name || 'error').slice(0, 40) });
       res.status(status).json({ error: map[err.message] ? err.message : 'relay_failed' });
@@ -681,7 +706,8 @@ export function createApp({ db, delivery, config = loadConfig(), logger = consol
     const purgeOk = Date.now() - health.purgeOkAt <= PURGE_STALE_MS;
     const otpOk = !!delivery.configured;
     const ok = dbOk && purgeOk && otpOk;
-    res.status(ok ? 200 : 503).json({ ok, db: dbOk ? 'ok' : 'error', purge: purgeOk ? 'ok' : 'stale', otp: otpOk ? 'ok' : 'unconfigured' });
+    // `relay` is information for outcome checks, not part of `ok`: a phone being offline is not the server being down.
+    res.status(ok ? 200 : 503).json({ ok, db: dbOk ? 'ok' : 'error', purge: purgeOk ? 'ok' : 'stale', otp: otpOk ? 'ok' : 'unconfigured', relay: { phonesConnected: phoneConnections.size, last24h: relayStats.last24h() } });
   });
 
   // Last-resort handlers: never leak stack traces or internals.
