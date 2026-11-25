@@ -85,3 +85,9 @@ if it does, set `EXTRA_REDIRECT_HOSTS=<host>` and redeploy/restart, or `REDIRECT
    pre-deploy hijack, residual R1).
 7. Approve running the deploy: this branch is local only, not pushed (the repo is public; the review doc describes fixed issues
    and residual risks without exploit steps, and should be pushed after the deploy).
+
+## Deploy record
+
+| Date (UTC) | Fly release | Image | main SHA | Notes |
+|---|---|---|---|---|
+| 2026-11-25 22:03 | v8 | registry.fly.io/inboxiq-mcp:deployment-01M8ABQ9CK0TSW5SC732SQSKDZ | 1db4eab | PR #2: relay outcome counts in `/healthz/deep`, plain offline reply with `Retry-After`, daily `relay-phone-offline` report. 54 tests and smoke pass (Node 20). Checked live: `/healthz/deep` ok with the `relay` block, `/mcp` without a token 401. No schema change. Rollback: `flyctl deploy -a inboxiq-mcp --image registry.fly.io/inboxiq-mcp:deployment-01M6BV5EJ7KQ5SQ630PTW8AGW2 --strategy immediate`. |
